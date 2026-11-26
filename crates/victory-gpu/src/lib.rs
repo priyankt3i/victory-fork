@@ -19,9 +19,15 @@
 mod ambient;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
+// The card's time by kind of list: its spans are not placed in the merged
+// host's lists yet (only its line is read), so most of it is unused.
 #[cfg(windows)]
+#[allow(dead_code)]
 mod cardmeter;
+// RenderDoc: loaded at device creation; its capture triggers are not
+// placed in the merged host yet.
 #[cfg(all(windows, feature = "diagnostics"))]
+#[allow(dead_code)]
 mod renderdoc;
 pub mod console;
 #[cfg(all(windows, feature = "diagnostics"))]

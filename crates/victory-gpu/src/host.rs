@@ -828,6 +828,15 @@ pub(crate) fn host() -> Option<&'static Host> {
 }
 
 fn create() -> windows::core::Result<Host> {
+    // The driver's errors in the Windows event log, watched while the title
+    // runs (`crate::drvwatch`), and the title's crowded thread groups given
+    // more processors if asked (`VICTORY_SPREAD`, `crate::spread`).
+    crate::drvwatch::start();
+    crate::spread::start();
+    // Diagnostics: RenderDoc, if asked for, before any graphics interface
+    // is made (`VICTORY_RENDERDOC`).
+    #[cfg(feature = "diagnostics")]
+    crate::renderdoc::load();
     // SAFETY: plain D3D12 object creation with valid descriptions.
     unsafe {
         // The debug layer only in builds with diagnostics.
@@ -974,6 +983,7 @@ fn create() -> windows::core::Result<Host> {
 impl Host {
     /// Ticks a second of the queue's timestamps; 0 if it has none.
     /// Whether the host device is on a software adapter (WARP; tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn software(&self) -> bool {
         use windows::Win32::Graphics::Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE;
         // SAFETY: a plain query.
@@ -2629,6 +2639,7 @@ struct Flight {
 }
 
 /// One thing in the line of what waits for the card, in order.
+#[allow(clippy::large_enum_variant)]
 enum Late {
     Run(Flight),
     /// A bottom-of-pipe write of the flight before it: address, what, bytes.
@@ -2855,7 +2866,7 @@ fn blame_stale(stale: &[(std::sync::Arc<crate::shadow::Shadow>, usize, usize)]) 
 /// title memory read, took `us`.
 #[cfg(feature = "diagnostics")]
 fn blamed(why: usize, us: u64) {
-    let (named, refused) = std::mem::replace(&mut *BLAMED.lock().unwrap_or_else(|e| e.into_inner()), (None, ""));
+    let (named, refused) = std::mem::take(&mut *BLAMED.lock().unwrap_or_else(|e| e.into_inner()));
     let (key, at) = match (why, named) {
         (WHY_READ | WHY_STALE, Some(named)) => named,
         (WHY_READ, None) => (("a host copy of what a copy done on the card wrote", refused, 0, 0, 0), 0),
@@ -7611,6 +7622,7 @@ enum Touch {
     /// The copy is given to shaders.
     Write(usize),
     /// Title memory is written.
+    #[allow(dead_code)]
     Title,
     Nothing,
     /// Another part of the submission begins.

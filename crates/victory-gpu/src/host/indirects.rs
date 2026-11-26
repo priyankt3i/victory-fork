@@ -11,6 +11,10 @@
 //! has before it. Nothing is kept without device-removed data.
 //! `VICTORY_D3D12_DRED=faults` and no data at all: nothing is noted.
 
+// Read by the removal reports of diagnostics builds; the others only keep
+// the tables.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

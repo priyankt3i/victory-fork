@@ -34,7 +34,8 @@ pub(crate) fn tripped() -> bool {
     TRIPPED.load(Relaxed)
 }
 
-/// Driver errors seen since the start.
+/// Driver errors seen since the start (the fork's frame line read it).
+#[allow(dead_code)]
 pub(crate) fn errors() -> u64 {
     ERRORS.load(Relaxed)
 }

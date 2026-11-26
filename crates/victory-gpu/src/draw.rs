@@ -272,37 +272,6 @@ fn jump_windows() -> bool {
     }
 }
 
-/// Whether a single record that misses its window is gathered: given a
-/// slot that the list's prelude fills in one pass with the list's other
-/// such records, in place of a pass of ours in front of its draw
-/// (`crate::indirect::gather`; `VICTORY_INDIRECT_GATHER=1`; `alt`: twenty
-/// seconds with, twenty without, in turn, each change said in the log).
-/// Off by default. Needs [`windows`].
-fn gathers() -> bool {
-    /// 0 off, 1 on, 2 in turn.
-    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    match *MODE.get_or_init(|| match std::env::var("VICTORY_INDIRECT_GATHER").as_deref() {
-        Ok("1") => 1,
-        Ok("alt") => 2,
-        _ => 0,
-    }) {
-        0 => false,
-        1 => true,
-        _ => {
-            static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-            let on = (EPOCH.get_or_init(std::time::Instant::now).elapsed().as_secs() / 20) % 2 == 1;
-            static LAST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
-            if LAST.swap(u8::from(on), std::sync::atomic::Ordering::Relaxed) != u8::from(on) {
-                tracing::info!(
-                    "single indirect records are gathered for their list's prelude from now (VICTORY_INDIRECT_GATHER=alt): {}",
-                    if on { "ON" } else { "off, as usual" }
-                );
-            }
-            on
-        }
-    }
-}
-
 /// The records of a window opened at a remembered step ([`jump_windows`]):
 /// what the record after a lone one opens.
 const WINDOW_JUMP: u32 = 16;
@@ -1700,7 +1669,7 @@ impl State {
                 } else {
                     crate::memory::Use::Reads
                 };
-                let Some(ready) = self.memory_ready(list, &t, compute, use_) else {
+                let Some(ready) = self.memory_ready(list, t, compute, use_) else {
                     once!("a shader that reads title memory by address without a view heap to hold its views: the draw is dropped");
                     return false;
                 };
@@ -4488,7 +4457,7 @@ fn depth_state(texture: &ID3D12Resource, desc: Option<&D3D12_DEPTH_STENCIL_VIEW_
 
 /// A few things, up to `N` of them without memory of the heap: what a draw's
 /// tables are gone through with, some six lists a stage.
-struct Few<T, const N: usize> {
+pub(crate) struct Few<T, const N: usize> {
     few: [T; N],
     len: usize,
     /// All of them, if they are more.

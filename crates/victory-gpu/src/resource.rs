@@ -101,6 +101,7 @@ pub(crate) struct ResourceDesc {
 #[cfg(windows)]
 impl ResourceDesc {
     /// The texture of this one's levels from `base` on.
+    #[allow(clippy::wrong_self_convention)]
     fn from_level(&self, base: u32) -> ResourceDesc {
         let mut d = *self;
         if base > 0 {
