@@ -28,6 +28,65 @@ developer or publisher.
   are carried here unchanged apart from one merge conflict.
 - This fork's changes were developed with [Claude Code](https://claude.com/claude-code).
 
+## Merged: the RX 7900 XTX fork's work (2026-11-26)
+
+This tree now carries the work of
+[victory-7900xtx](https://github.com/priyankt3i/victory-7900xtx) (AvatarManz's
+VIctory-7900XTX), the fastest build measured so far: 13-22 fps indoors and on the
+first boat mission on an RX 7900 XTX, a 41-minute session without a crash. None of
+what it brings is specific to AMD cards (the "RDNA" in a few switch names is the
+*console's* GPU, which every host card emulates the same way), so it is merged here
+for NVIDIA cards as well. **Not measured on an NVIDIA card yet**: the numbers above
+are the AMD tester's, not this fork's.
+
+What came in (details and measurements: [docs/findings.md](docs/findings.md)):
+
+- the title's list calls written down and translated by eight threads of ours
+  (`VICTORY_THIN=1`, set by `scripts/play.ps1`); submissions prepared and sent by a thread of ours
+  (`VICTORY_ASYNC_SUBMIT`, its own design), parts joined (`VICTORY_JOIN_PARTS`);
+- textures uploaded on a copy queue of their own, shown only after their upload ran
+  (`VICTORY_UPLOAD_AHEAD`, `VICTORY_SHOW_AFTER`);
+- `monitorx`/`mwaitx` and the 12-byte `clzero` loops patched in place at their first
+  fault, so they stop faulting (`VICTORY_PATCH_WAITS=0`, `VICTORY_PATCH_CLZERO=0`: as
+  before); this fork's 15-byte `clzero` loop taken whole is kept beside it;
+- the heap's records read as bytes and compared on several threads; render targets and
+  pipelines not bound again when they are the same (`VICTORY_BIND_CACHE=0`: always);
+- the water read-back (`VICTORY_TEXTURE_BACK`) now on by default;
+- DirectStorage queues no longer submit themselves at half full
+  (`VICTORY_DSTORAGE_HALF=1`: they do), which replaces this fork's held reads;
+- a stand-in for the ray-traced indirect light (`VICTORY_AMBIENT=0.8`, which
+  `scripts/play.ps1` sets; off otherwise), for the shadowed areas that are black
+  without ray tracing (the AMD tester still finds dim rooms too dark without it);
+- `victory warm` (pipelines made ahead), frame record and replay
+  ([docs/replay.md](docs/replay.md)), the panel (`VICTORY_PANEL=1`, F3).
+
+Kept from this fork on top of it: pipelines for a render target bound in another format
+than the pipeline declares (`VICTORY_TARGET_VARIANTS`), integer targets that do not
+blend, constant views capped at 64 KiB before rounding (an invalid call NVIDIA answers
+with a device removal), the copy of a texture the card wrote into its views (fork PR
+#1241), the commit address told to the write watch (fork PR #1185), the warning that
+four-dword scalar loads (`VICTORY_SHADER_OPT` bit 64) turned the water black on an
+RTX 4070.
+
+Left out because the AMD tree does the same thing another way: this fork's submit
+thread, second copy queue (`queue2`), staging pool, gathering of indirect records,
+heap-pass cut and page-at-once switches, frame shot (`VICTORY_SHOT`), corner frame
+counter, back-read instrument and the lighter device-removed-data forms (the AMD tree
+has `VICTORY_D3D12_DRED=light` of its own).
+
+**Memory on a 32 GB PC.** The AMD tester saw 40-46 GB of private memory (64 GB of RAM
+recommended there): lists' allocators about 9 GB, windows 7, uploads 4
+(`VICTORY_MEMORY_MAP=1` lists it). This fork used 23-27 GB. On 32 GB, watch the
+memory line in the log before longer sessions.
+
+How to run it is the AMD tree's way:
+
+```powershell
+cargo build --locked --profile diag -p victory --features diagnostics
+scripts\play.ps1 -Exe <path of your copy's executable>       # -Safe: without the newest, faster ways
+target\diag\victory.exe warm --used                          # pipelines made ahead, after a new driver or build
+```
+
 ## Status of this fork (2026-11-26, 02:15 UTC)
 
 **Playable for half an hour at a time, slowly: about 7 to 12 frames per second (the console runs

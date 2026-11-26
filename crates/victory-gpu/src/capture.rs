@@ -58,12 +58,6 @@ pub(crate) fn listed(n: u64) -> bool {
 /// stays empty.
 #[cfg(feature = "diagnostics")]
 pub(crate) fn op(list: usize, what: impl FnOnce() -> String) {
-    // A frame shot (`crate::shot`) keeps every line of its frame.
-    if crate::shot::keeping_lines() {
-        let text = what();
-        crate::shot::line(list, &text);
-        return op_listed(list, move || text);
-    }
     op_listed(list, what);
 }
 
@@ -206,6 +200,27 @@ fn save_as(name: &str, width: u32, height: u32, pitch: usize, bgra: bool, rows: 
             }
         }
     }
+    let png = encode(w, h, &raw);
+    let path = folder.join(format!("{name}.png"));
+    match std::fs::write(&path, png) {
+        Ok(()) => tracing::info!(path = %path.display(), "frame saved"),
+        Err(e) => tracing::warn!(error = %e, path = %path.display(), "frame not saved"),
+    }
+}
+
+/// A PNG of `width * height` pixels of 8-bit RGB.
+pub(crate) fn png(width: u32, height: u32, rgb: &[u8]) -> Vec<u8> {
+    let row = width as usize * 3;
+    let mut raw = Vec::with_capacity((row + 1) * height as usize);
+    for line in rgb.chunks_exact(row.max(1)) {
+        raw.push(0);
+        raw.extend_from_slice(line);
+    }
+    encode(width, height, &raw)
+}
+
+/// A PNG of rows of RGB, each behind its filter byte.
+fn encode(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut header = Vec::new();
     header.extend(w.to_be_bytes());
@@ -213,15 +228,11 @@ fn save_as(name: &str, width: u32, height: u32, pitch: usize, bgra: bool, rows: 
     header.extend([8, 2, 0, 0, 0]); // 8-bit RGB
     chunk(&mut png, b"IHDR", &header);
     let mut compressed = vec![0u8; zlib_rs::compress_bound(raw.len())];
-    let (idat, rc) = zlib_rs::compress_slice(&mut compressed, &raw, zlib_rs::DeflateConfig::new(3));
+    let (idat, rc) = zlib_rs::compress_slice(&mut compressed, raw, zlib_rs::DeflateConfig::new(3));
     debug_assert_eq!(rc, zlib_rs::ReturnCode::Ok);
     chunk(&mut png, b"IDAT", idat);
     chunk(&mut png, b"IEND", &[]);
-    let path = folder.join(format!("{name}.png"));
-    match std::fs::write(&path, png) {
-        Ok(()) => tracing::info!(path = %path.display(), "frame saved"),
-        Err(e) => tracing::warn!(error = %e, path = %path.display(), "frame not saved"),
-    }
+    png
 }
 
 /// A PNG of `w` by `h` 8-bit RGB pixels; `raw` is its rows, each after a
@@ -387,7 +398,7 @@ static TARGETS: std::sync::Mutex<Vec<(usize, std::sync::Arc<crate::resource::Hos
 
 fn dump_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| folder().is_some() && std::env::var_os("VICTORY_DUMP_TARGETS").is_some())
+    *ON.get_or_init(|| folder().is_some() && crate::switch::on("VICTORY_DUMP_TARGETS"))
 }
 
 /// Notes a title texture the frame being built renders to or writes.

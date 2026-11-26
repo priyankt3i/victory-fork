@@ -105,7 +105,7 @@ pub(crate) fn on() -> bool {
 
 fn make() -> Option<Meter> {
     let host = crate::host::host()?;
-    let device = host.device();
+    let device = &host.device;
     let mut heap: Option<ID3D12QueryHeap> = None;
     let mut back: Option<ID3D12Resource> = None;
     let readback = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_READBACK, ..Default::default() };
