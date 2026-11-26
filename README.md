@@ -87,6 +87,25 @@ scripts\play.ps1 -Exe <path of your copy's executable>       # -Safe: without th
 target\diag\victory.exe warm --used                          # pipelines made ahead, after a new driver or build
 ```
 
+### On Linux, under Proton (not tested yet)
+
+The layer is a Windows program; under Proton its Direct3D 12 runs on vkd3d-proton, which
+on NVIDIA has what it asks for (shader model 6.6, mesh shaders, DXR). The code already
+knows Wine in places (`xmem::on_wine`, the WARP adapter, vkd3d-proton's refusal of
+blending integer targets), but nobody has played it this way yet: the first runs are a
+test. Build on Linux with cargo-xwin (it fetches Microsoft's CRT and SDK once) and LLVM's
+MASM, which one dependency (blake3) assembles with:
+
+```sh
+cargo install --locked cargo-xwin
+mkdir -p ~/.local/bin && printf '#!/bin/sh\nexec llvm-ml -m64 "$@"\n' > ~/.local/bin/ml64.exe && chmod +x ~/.local/bin/ml64.exe
+cargo xwin build --locked --profile diag -p victory --features diagnostics --target x86_64-pc-windows-msvc
+scripts/play.sh <path of your copy's executable>     # umu-run, or PROTON=<a Proton folder>; --safe, --ray-tracing
+```
+
+Paths the layer reads (`victory.toml`, `VICTORY_GAME_DIR`) are Windows paths there:
+`/home/me/game` is `Z:\home\me\game`.
+
 ## Status of this fork (2026-11-26, 02:15 UTC)
 
 **Playable for half an hour at a time, slowly: about 7 to 12 frames per second (the console runs
