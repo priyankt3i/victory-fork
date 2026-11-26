@@ -239,7 +239,76 @@ static IDLE: std::sync::Mutex<(Vec<Idle>, u64)> = std::sync::Mutex::new((Vec::ne
 // the frame before are still in the air, so more than 128 are out at a
 // time: 80 host lists were made and as many thrown away every frame,
 // 8 ms to make and more to free, on the thread that submits.)
+// (Now by the PC's memory: `crate::budget::Limits::idle_lists` and
+// `idle_list_bytes`, these on 48 GB and more.)
 const IDLE_MOST: (usize, u64) = (512, 256 << 20);
+
+/// The fewest idle lists there were since the last trim ([`trim_idle`]):
+/// as many as were never needed meanwhile. `usize::MAX`: none was taken.
+#[cfg(windows)]
+static IDLE_LOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+/// When idle lists were last looked at for trimming ([`crate::host::now_ms`]).
+#[cfg(windows)]
+static TRIMMED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The most host lists kept idle, and the upload memory they may keep
+/// between them, for this PC's memory budget.
+#[cfg(windows)]
+fn idle_most() -> (usize, u64) {
+    let l = crate::budget::limits();
+    (l.idle_lists.min(IDLE_MOST.0), l.idle_list_bytes.min(IDLE_MOST.1))
+}
+
+/// Lets go of the idle host lists no recording needed for a while: each
+/// keeps two command allocators at the most memory any recording of it
+/// ever took, so a burst (a loading screen, a frame of 300 lists) left
+/// hundreds of them, gigabytes, waiting for a burst that may not come. With
+/// the budget's [`crate::budget::Limits::trim_lists`]: as many as the pool
+/// never went below in the last `list_window_ms` go, but a margin of them,
+/// the ones used longest ago first (lists are taken from the top, so those
+/// are at the bottom). What a frame takes stays: a list let go here was
+/// not taken once in the window. Short of memory ([`crate::budget::pressed`])
+/// it looks every second.
+#[cfg(windows)]
+fn trim_idle() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let limits = crate::budget::limits();
+    let pressed = crate::budget::pressed();
+    if !limits.trim_lists && !pressed {
+        return;
+    }
+    let now = crate::host::now_ms().max(1);
+    let window = if pressed { 1_000 } else { limits.list_window_ms };
+    let last = TRIMMED_AT.load(Relaxed);
+    if last == 0 {
+        // The window starts with the first list kept.
+        let _ = TRIMMED_AT.compare_exchange(0, now, Relaxed, Relaxed);
+        return;
+    }
+    if now < last + window || TRIMMED_AT.compare_exchange(last, now, Relaxed, Relaxed).is_err() {
+        return;
+    }
+    let gone: Vec<Idle> = {
+        let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+        let len = idle.0.len();
+        let extra = crate::budget::lists_to_let_go(IDLE_LOW.swap(len, Relaxed), len, limits.list_margin);
+        let gone: Vec<Idle> = idle.0.drain(..extra).collect();
+        idle.1 -= gone.iter().map(|g| g.1).sum::<u64>();
+        gone
+    };
+    if !gone.is_empty() {
+        let n = gone.len() as u64;
+        let all = crate::budget::LISTS_TRIMMED.fetch_add(n, Relaxed) + n;
+        tracing::debug!(lists = n, since_start = all, pressed, "idle host lists no recording needed let go");
+    }
+    // They have run and were reset: nothing reads them. Freed on a thread
+    // of their own: hundreds of lists let go at once are milliseconds of
+    // the graphics kernel's time, which the submitting thread does not wait
+    // for.
+    if !gone.is_empty() && std::thread::Builder::new().name("victory-lists-freed".into()).spawn(move || drop(gone)).is_err() {
+        tracing::debug!("no thread to free idle host lists on: freed here");
+    }
+}
 
 /// Whether host lists that have run are used again (on by default;
 /// `VICTORY_LIST_POOL=0`: each is made new and thrown away, as before).
@@ -259,6 +328,8 @@ fn fresh_list() -> Option<crate::host::HostList> {
         if let Some(Idle(_, bytes)) = &taken {
             idle.1 -= bytes;
         }
+        // (None left counts as none to spare.)
+        IDLE_LOW.fetch_min(idle.0.len(), std::sync::atomic::Ordering::Relaxed);
         taken
     };
     match idle {
@@ -280,7 +351,8 @@ pub(crate) fn recycle(lists: Vec<Detached>, ran: &[usize]) {
         // The descriptor slots and the upload memory its commands named.
         drop(_state);
         drop(_uploads);
-        if !ran.contains(&i) || IDLE.lock().unwrap_or_else(|e| e.into_inner()).0.len() >= IDLE_MOST.0 {
+        let most = idle_most();
+        if !ran.contains(&i) || IDLE.lock().unwrap_or_else(|e| e.into_inner()).0.len() >= most.0 {
             continue;
         }
         // As the title's reset does: what the list kept for its commands
@@ -288,11 +360,19 @@ pub(crate) fn recycle(lists: Vec<Detached>, ran: &[usize]) {
         host.reset();
         let bytes = host.scratch_kept();
         let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
-        if idle.0.len() < IDLE_MOST.0 && idle.1 + bytes <= IDLE_MOST.1 {
+        if idle.0.len() < most.0 && idle.1 + bytes <= most.1 {
             idle.0.push(Idle(host, bytes));
             idle.1 += bytes;
         }
     }
+    trim_idle();
+}
+
+/// For the memory line: host lists idle now, and the upload memory they keep.
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn idle_lists() -> (usize, u64) {
+    let idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+    (idle.0.len(), idle.1)
 }
 
 /// A wait for a memory value recorded into list `this`, with waits cut

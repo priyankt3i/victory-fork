@@ -433,6 +433,8 @@ fn sweep() {
     #[cfg(feature = "diagnostics")]
     crate::book::check();
     crate::pool::room(host().and_then(|h| h.video_memory()));
+    trim_scratch();
+    crate::pool::trim_staging();
     crate::pipeline::trim_library();
     crate::shadow::let_go_idle();
     crate::texture::let_go_idle();
@@ -833,6 +835,8 @@ fn create() -> windows::core::Result<Host> {
     // more processors if asked (`VICTORY_SPREAD`, `crate::spread`).
     crate::drvwatch::start();
     crate::spread::start();
+    // The PC's memory budget, chosen and said in the log now.
+    let _ = crate::budget::limits();
     // Diagnostics: RenderDoc, if asked for, before any graphics interface
     // is made (`VICTORY_RENDERDOC`).
     #[cfg(feature = "diagnostics")]
@@ -1941,7 +1945,7 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
         let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
         for (chunk, size) in chunks {
             let back = if scratch_pool() {
-                spare.give(chunk, size, if keep_freed() { SPARE_KEPT } else { SPARE_MOST })
+                spare.give(chunk, size, scratch_most())
             } else {
                 Some(chunk)
             };
@@ -1959,6 +1963,36 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
         }
     }
     // Freed outside the lock.
+    drop(freed);
+}
+
+/// The most bytes of scratch chunks kept while no list holds them: by the
+/// PC's memory budget ([`crate::budget`]), the least while the PC is short
+/// of memory; [`SPARE_KEPT`] and [`SPARE_MOST`] on 48 GB and more.
+fn scratch_most() -> u64 {
+    let l = crate::budget::limits();
+    l.scratch(keep_freed(), crate::budget::pressed()).min(SPARE_KEPT.max(SPARE_MOST))
+}
+
+/// Short of memory ([`crate::budget::pressed`]): spare scratch chunks past
+/// what may be kept now go, the ones given back first. Called once a
+/// second by the sweep ([`sweep`]).
+pub(crate) fn trim_scratch() {
+    let most = scratch_most();
+    let freed: Vec<Chunk> = {
+        let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut freed = Vec::new();
+        while spare.bytes > most && !spare.kept.is_empty() {
+            let (chunk, size) = spare.kept.remove(0);
+            spare.bytes -= size;
+            ALIVE[3].fetch_sub(1, Ordering::Relaxed);
+            ALIVE[4].fetch_sub(size, Ordering::Relaxed);
+            ALIVE[1].fetch_sub(1, Ordering::Relaxed);
+            ALIVE[2].fetch_sub(size, Ordering::Relaxed);
+            freed.push(chunk);
+        }
+        freed
+    };
     drop(freed);
 }
 

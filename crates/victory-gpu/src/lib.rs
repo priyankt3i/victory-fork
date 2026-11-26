@@ -29,6 +29,7 @@ mod cardmeter;
 #[cfg(all(windows, feature = "diagnostics"))]
 #[allow(dead_code)]
 mod renderdoc;
+mod budget;
 pub mod console;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;

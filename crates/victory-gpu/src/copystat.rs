@@ -795,6 +795,18 @@ fn log_memory() {
         mb(card[3]),
     );
     {
+        let (lists, list_bytes) = crate::list::idle_lists();
+        let l = crate::budget::limits();
+        tracing::info!(
+            "memory budget {:?} (VICTORY_MEMORY_BUDGET): {lists} host lists idle ({:.0} MB of upload memory kept by them), {} let go \
+             unneeded since the start; the PC {}",
+            l.tier,
+            mb(list_bytes),
+            crate::budget::LISTS_TRIMMED.load(Relaxed),
+            if crate::budget::pressed() { "short of memory: what is kept is cut to its least" } else { "has memory free" },
+        );
+    }
+    {
         let [textures, staging] = crate::pool::memory();
         tracing::info!("memory in blocks (VICTORY_TEXTURE_POOL=0 turns them off): {textures} MB of textures, {staging} MB of their staging buffers");
     }

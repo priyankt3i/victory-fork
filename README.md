@@ -74,10 +74,32 @@ heap-pass cut and page-at-once switches, frame shot (`VICTORY_SHOT`), corner fra
 counter, back-read instrument and the lighter device-removed-data forms (the AMD tree
 has `VICTORY_D3D12_DRED=light` of its own).
 
-**Memory on a 32 GB PC.** The AMD tester saw 40-46 GB of private memory (64 GB of RAM
-recommended there): lists' allocators about 9 GB, windows 7, uploads 4
-(`VICTORY_MEMORY_MAP=1` lists it). This fork used 23-27 GB. On 32 GB, watch the
-memory line in the log before longer sessions.
+**Memory on a 32 GB PC: the budget mode** (`VICTORY_MEMORY_BUDGET`, `crate::budget`). The
+console's 16 GB are shared by its CPU and graphics processor; here the title's memory
+(about 13.5 GB on Series X) is in the PC's memory, the card gets copies of what it reads,
+and the layer keeps what it made so as not to make it again. The AMD tester, on 64 GB, saw
+40-46 GB of private memory: lists' allocators about 9 GB, windows of title memory 7,
+uploads 4. Those caches are now sized by the PC's memory:
+
+| | 48 GB and more (`large`) | 24-48 GB (`32`) | less (`16`) |
+|---|---|---|---|
+| Idle host lists kept (each with two command allocators at their peak size) | up to 512, kept | up to 512, those no recording needed for 10 s let go but 32 | up to 256, unneeded for 5 s but 16 |
+| Their upload memory | 256 MB | 128 MB | 64 MB |
+| Spare scratch memory for lists | 1 GB | 384 MB | 128 MB |
+| Empty 64 MB staging blocks kept | 8 | 4 | 2 |
+| Under this much free memory, everything kept is cut to its least | 2 GB | 3 GB | 2 GB |
+
+`auto` (the default) picks the column by the PC's memory; `large` is the tree as it was.
+What a frame uses is never taken away: a list goes only if no recording took it in the
+window (after a loading burst of 400 lists, play at 80 a frame keeps 112). The lists are
+freed on a thread of their own, so the submitting thread does not wait for it. The log
+says the chosen budget at the start, and in diagnostics builds the memory line says how
+many lists are idle, how many were let go, and whether the PC is short of memory. Not
+measured on a card yet: watch that line, and the frame rate, in the first sessions.
+
+What the budget does not touch is what the title needs: its own memory and the copies the
+card reads. `--console series-s` gives the title 7.6 GB instead of 13.5, and the picture
+the Series S has (the AMD tester measured it no faster).
 
 How to run it is the AMD tree's way:
 

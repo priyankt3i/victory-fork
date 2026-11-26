@@ -180,11 +180,19 @@ struct Pool<B> {
     /// The empty blocks it was last told to keep, and the most it keeps.
     spare: usize,
     most: usize,
+    /// Blocks of the PC's memory: also held to the PC's memory budget
+    /// ([`crate::budget::Limits::staging`]).
+    ram: bool,
 }
 
 impl<B: Clone> Pool<B> {
     const fn new(most: usize) -> Pool<B> {
-        Pool { blocks: Vec::new(), resting: VecDeque::new(), spare: 0, most }
+        Pool { blocks: Vec::new(), resting: VecDeque::new(), spare: 0, most, ram: false }
+    }
+
+    /// A pool of blocks in the PC's memory.
+    const fn of_ram(most: usize) -> Pool<B> {
+        Pool { blocks: Vec::new(), resting: VecDeque::new(), spare: 0, most, ram: true }
     }
 
     /// A piece of `len` bytes and the memory it lies in, and whether that
@@ -284,6 +292,7 @@ impl<B: Clone> Pool<B> {
         }
         // (Without a piece given back too, once there is less room.)
         let most = SPARES.load(Ordering::Relaxed).min(self.most);
+        let most = if self.ram { most.min(crate::budget::limits().staging(crate::budget::pressed())) } else { most };
         if any || most < self.spare {
             self.spare = most;
             let mut spare = 0;
@@ -310,7 +319,7 @@ struct Upload(ID3D12Resource, *mut u8);
 unsafe impl Send for Upload {}
 
 static TEXTURES: Mutex<Pool<ID3D12Heap>> = Mutex::new(Pool::new(SPARE_KEPT));
-static STAGING: Mutex<Pool<Upload>> = Mutex::new(Pool::new(STAGING_KEPT));
+static STAGING: Mutex<Pool<Upload>> = Mutex::new(Pool::of_ram(STAGING_KEPT));
 
 fn lock<T>(m: &'static Mutex<T>) -> std::sync::MutexGuard<'static, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -329,6 +338,13 @@ pub(crate) fn texture_room() -> u64 {
 #[cfg(feature = "diagnostics")]
 pub(crate) fn memory() -> [u64; 2] {
     [lock(&TEXTURES).blocks() as u64 * (BLOCK >> 20), lock(&STAGING).blocks() as u64 * (BLOCK >> 20)]
+}
+
+/// Lets go of the empty staging blocks past what the PC's memory budget
+/// keeps now (short of memory: one), also while no texture is staged.
+/// Called once a second by the host's sweep.
+pub(crate) fn trim_staging() {
+    lock(&STAGING).rested(now());
 }
 
 /// Part of a block of mapped upload memory, back in the pool when dropped.
