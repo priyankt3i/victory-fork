@@ -127,6 +127,8 @@ impl Target {
 /// The readback resources and the allocation the pixels belong to.
 pub(crate) struct Back {
     buffer: ID3D12Resource,
+    /// Its size class ([`size_class`]): back to [`SPARE`] when this goes.
+    class: u64,
     footprints: Vec<D3D12_PLACED_SUBRESOURCE_FOOTPRINT>,
     rows: Vec<u32>,
     mips: u32,
@@ -177,7 +179,14 @@ pub(crate) fn record(list: &ID3D12GraphicsCommandList, target: Target) -> Option
             .checked_mul(u64::from(format.Depth))?;
         total = total.max(footprint.Offset.checked_add(pitched)?);
     }
-    let buffer = host.read_back_buffer(total)?;
+    let class = size_class(total);
+    let buffer = match take_spare(class) {
+        Some(buffer) => buffer,
+        None => {
+            MADE.fetch_add(1, Ordering::Relaxed);
+            host.read_back_buffer(class)?
+        }
+    };
     // With device-removed data on: a page fault in it, alive or freed, is
     // reported under this name (it was "unnamed").
     crate::host::name(&buffer, || format!("texback read-back buffer of {total} bytes"));
@@ -197,7 +206,72 @@ pub(crate) fn record(list: &ID3D12GraphicsCommandList, target: Target) -> Option
         // SAFETY: an open list; the texture is in the copy-source state.
         unsafe { list.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
     }
-    Some(Back { buffer, footprints, rows, mips, layout: target.layout, ticket: target.ticket })
+    Some(Back { buffer, class, footprints, rows, mips, layout: target.layout, ticket: target.ticket })
+}
+
+/// A read-back buffer kept for the next copy-back. (A buffer of ours, read
+/// and written only by the copy-backs that take it, one at a time.)
+struct Spare(ID3D12Resource, u64);
+// SAFETY: D3D12 resources are free-threaded; a spare one is touched by
+// nobody until it is taken out again.
+unsafe impl Send for Spare {}
+
+/// Read-back buffers no copy-back holds, newest last, and their bytes.
+///
+/// Every copy-back made a committed read-back buffer of its own and freed it
+/// after the list had run: some 966,000 in 21 minutes of play
+/// (fxceless/victory-fork#1340), each a call into the driver and the kernel,
+/// and on Linux with NVIDIA's driver enough of them to run it out of DMA
+/// mappings. The buffers are of a few sizes (the four water kinds), so they
+/// are kept by size class and used again, up to the PC's memory budget
+/// ([`crate::budget::Limits::readback`]).
+static SPARE: Mutex<(Vec<Spare>, u64)> = Mutex::new((Vec::new(), 0));
+
+/// Read-back buffers made, and taken from [`SPARE`], since the start.
+static MADE: AtomicU64 = AtomicU64::new(0);
+static REUSED: AtomicU64 = AtomicU64::new(0);
+
+/// The size a read-back buffer of `total` bytes is made at: a power of two,
+/// 64 KiB at least, so that copy-backs of nearby sizes share buffers.
+fn size_class(total: u64) -> u64 {
+    total.max(64 << 10).next_power_of_two()
+}
+
+fn take_spare(class: u64) -> Option<ID3D12Resource> {
+    let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
+    let at = spare.0.iter().rposition(|s| s.1 == class)?;
+    let Spare(buffer, bytes) = spare.0.remove(at);
+    spare.1 -= bytes;
+    let reused = REUSED.fetch_add(1, Ordering::Relaxed) + 1;
+    if reused.is_power_of_two() && reused >= 1024 {
+        tracing::info!(reused, made = MADE.load(Ordering::Relaxed), "texture read-back buffers used again");
+    }
+    Some(buffer)
+}
+
+impl Drop for Back {
+    /// The list that copied into the buffer has run and was reset (a
+    /// list's copy-backs go with its deferred work), as when the buffer was
+    /// freed here: it is kept for the next copy-back, or freed past the
+    /// budget, the oldest first.
+    fn drop(&mut self) {
+        let most = crate::budget::limits().readback(crate::budget::pressed());
+        let freed: Vec<Spare> = {
+            let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
+            if self.class <= most {
+                spare.0.push(Spare(self.buffer.clone(), self.class));
+                spare.1 += self.class;
+            }
+            let mut freed = Vec::new();
+            while spare.1 > most && !spare.0.is_empty() {
+                let s = spare.0.remove(0);
+                spare.1 -= s.1;
+                freed.push(s);
+            }
+            freed
+        };
+        drop(freed);
+    }
 }
 
 /// Once the list has run, tile its texels back into the same title allocation.

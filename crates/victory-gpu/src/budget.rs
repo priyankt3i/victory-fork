@@ -59,6 +59,9 @@ pub(crate) struct Limits {
     pub(crate) scratch_most: u64,
     /// Empty 64 MiB blocks of texture staging buffers kept (`crate::pool`).
     pub(crate) staging_blocks: usize,
+    /// Read-back buffers of texture copy-backs kept for the next one
+    /// (`crate::texback`), in bytes.
+    pub(crate) readback_kept: u64,
     /// Free physical memory under which everything kept is cut to its
     /// least ([`pressed`]).
     pub(crate) floor: u64,
@@ -77,6 +80,7 @@ impl Limits {
                 scratch_kept: GIB,
                 scratch_most: 128 * MIB,
                 staging_blocks: 8,
+                readback_kept: 128 * MIB,
                 floor: 2 * GIB,
             },
             Tier::Mid => Limits {
@@ -89,6 +93,7 @@ impl Limits {
                 scratch_kept: 384 * MIB,
                 scratch_most: 128 * MIB,
                 staging_blocks: 4,
+                readback_kept: 64 * MIB,
                 floor: 3 * GIB,
             },
             Tier::Small => Limits {
@@ -101,6 +106,7 @@ impl Limits {
                 scratch_kept: 128 * MIB,
                 scratch_most: 64 * MIB,
                 staging_blocks: 2,
+                readback_kept: 32 * MIB,
                 floor: 2 * GIB,
             },
         }
@@ -110,6 +116,12 @@ impl Limits {
     /// of memory.
     pub(crate) fn scratch(&self, keep_freed: bool, pressed: bool) -> u64 {
         if keep_freed && !pressed { self.scratch_kept } else { self.scratch_most }
+    }
+
+    /// Read-back buffers kept now: a sixteenth while the PC is short of
+    /// memory.
+    pub(crate) fn readback(&self, pressed: bool) -> u64 {
+        if pressed { self.readback_kept / 16 } else { self.readback_kept }
     }
 
     /// Empty staging blocks kept now.
@@ -344,6 +356,7 @@ mod tests {
             assert_eq!(l.scratch(false, false), l.scratch_most);
             assert_eq!(l.scratch(true, false), l.scratch_kept);
             assert!(l.staging(true) <= 1);
+            assert!(l.readback(true) < l.readback(false));
             assert!(l.scratch_most <= l.scratch_kept);
         }
         // Smaller PCs keep less.

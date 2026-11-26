@@ -73,10 +73,13 @@ pub(crate) fn start() {
         let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
         let channel = wide("System");
         // The kernel drivers of the three vendors, and the system's own
-        // "display driver stopped responding" source.
+        // "display driver stopped responding" source; critical, errors and
+        // warnings only. ("Display" also writes information events: Auto HDR's
+        // notice, 4125, eight seconds after launch, was taken for a driver
+        // error, fxceless/victory-fork#1077 and #1253.)
         let query = wide(
             "*[System[Provider[@Name='nvlddmkm' or @Name='amdkmdag' or @Name='amdwddmg' or @Name='igfx' or @Name='igfxn' \
-             or @Name='Display']]]",
+             or @Name='Display'] and (Level=1 or Level=2 or Level=3)]]",
         );
         // SAFETY: valid strings for the call's length; the callback is a
         // plain function that touches only statics; the subscription is
@@ -177,7 +180,7 @@ mod tests {
     #[test]
     fn the_system_takes_the_subscription() {
         let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
-        let (channel, query) = (wide("System"), wide("*[System[Provider[@Name='nvlddmkm' or @Name='Display']]]"));
+        let (channel, query) = (wide("System"), wide("*[System[Provider[@Name='nvlddmkm' or @Name='Display'] and (Level=1 or Level=2 or Level=3)]]"));
         // SAFETY: as in `start`.
         let subscription = unsafe {
             EvtSubscribe(0, std::ptr::null_mut(), channel.as_ptr(), query.as_ptr(), 0, std::ptr::null(), Some(on_event), EvtSubscribeToFutureEvents)
